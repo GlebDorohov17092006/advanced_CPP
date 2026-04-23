@@ -1,6 +1,9 @@
 #pragma once
 
 #include <string>
+#include <memory>
+
+class Group;
 
 class User
 {
@@ -8,14 +11,16 @@ private:
     std::string user_name;
     std::string id;
     std::string meta_information;
-    std::string group_id;
+    std::weak_ptr<Group> group;
 
 public:
     User();
-    User(std::string user_name, std::string id,
-         std::string meta_information, std::string group_id);
+    User(std::string user_name, std::string id, std::string meta_information);
     std::string get_id() const;
-    std::string get_group_id() const;
+    std::string get_user_name() const;
+    std::string get_meta() const;
     std::string get_user_info() const;
-    void set_group_id(const std::string &new_group_id);
+    void set_group(std::shared_ptr<Group> g);
+    std::shared_ptr<Group> get_group() const;
+    void remove_group();
 };
