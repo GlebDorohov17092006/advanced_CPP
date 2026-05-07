@@ -1,243 +1,122 @@
 #ifndef TYPEMAP_H
 #define TYPEMAP_H
 
-#include "typelist.h"
 #include <optional>
 #include <tuple>
 #include <type_traits>
-#include <utility>
+#include <stdexcept>
 
 namespace typemap
 {
-    namespace detail
+    template <typename T, typename... Types>
+    struct IndexOf;
+
+    template <typename T, typename First, typename... Rest>
+    struct IndexOf<T, First, Rest...>
     {
-        template <typename T>
-        struct ValueHolder
-        {
-            T value;
-            bool has_value = false;
-        };
+        static constexpr int value = std::is_same_v<T, First> ? 0 : (IndexOf<T, Rest...>::value == -1 ? -1 : IndexOf<T, Rest...>::value + 1);
+    };
 
-        template <typename TypeList>
-        struct TypeMapStorage;
+    template <typename T>
+    struct IndexOf<T>
+    {
+        static constexpr int value = -1;
+    };
 
-        template <>
-        struct TypeMapStorage<typelist::TypeList<>>
-        {
-            static constexpr size_t size = 0;
-        };
+    template <typename T, typename... Types>
+    inline constexpr int index_of_v = IndexOf<T, Types...>::value;
 
-        template <typename First, typename... Rest>
-        struct TypeMapStorage<typelist::TypeList<First, Rest...>>
-        {
-            ValueHolder<First> first;
-            TypeMapStorage<typelist::TypeList<Rest...>> rest;
-
-            static constexpr size_t size = 1 + TypeMapStorage<typelist::TypeList<Rest...>>::size;
-        };
-
-        template <size_t Index, typename Storage>
-        struct GetByIndexHelper;
-
-        template <typename First, typename... Rest>
-        struct GetByIndexHelper<0, TypeMapStorage<typelist::TypeList<First, Rest...>>>
-        {
-            static ValueHolder<First> &get(TypeMapStorage<typelist::TypeList<First, Rest...>> &storage)
-            {
-                return storage.first;
-            }
-
-            static const ValueHolder<First> &get(const TypeMapStorage<typelist::TypeList<First, Rest...>> &storage)
-            {
-                return storage.first;
-            }
-        };
-
-        template <size_t Index, typename First, typename... Rest>
-        struct GetByIndexHelper<Index, TypeMapStorage<typelist::TypeList<First, Rest...>>>
-        {
-            static auto &get(TypeMapStorage<typelist::TypeList<First, Rest...>> &storage)
-            {
-                return GetByIndexHelper<Index - 1, TypeMapStorage<typelist::TypeList<Rest...>>>::get(storage.rest);
-            }
-
-            static const auto &get(const TypeMapStorage<typelist::TypeList<First, Rest...>> &storage)
-            {
-                return GetByIndexHelper<Index - 1, TypeMapStorage<typelist::TypeList<Rest...>>>::get(storage.rest);
-            }
-        };
-
-        template <typename T, typename TypeList>
-        struct FindTypeIndex;
-
-        template <typename T, typename First, typename... Rest>
-        struct FindTypeIndex<T, typelist::TypeList<First, Rest...>>
-        {
-            static constexpr int value = std::is_same_v<T, First> ? 0 : (FindTypeIndex<T, typelist::TypeList<Rest...>>::value == -1 ? -1 : FindTypeIndex<T, typelist::TypeList<Rest...>>::value + 1);
-        };
-
-        template <typename T>
-        struct FindTypeIndex<T, typelist::TypeList<>>
-        {
-            static constexpr int value = -1;
-        };
-    }
-
-    template <typename... KeyTypes>
+    template <typename... Keys>
     class TypeMap
     {
     private:
-        using KeyTypeList = typelist::TypeList<KeyTypes...>;
-        using Storage = detail::TypeMapStorage<KeyTypeList>;
-        Storage m_storage;
-
         template <typename T>
-        static constexpr int get_index()
+        static constexpr int index_of()
         {
-            constexpr int idx = typelist::index_of_v<T, KeyTypeList>;
-            static_assert(idx != -1, "Type is not a valid key for this TypeMap");
-            return idx;
+            static_assert(index_of_v<T, Keys...> != -1, "Key not found in TypeMap");
+            return index_of_v<T, Keys...>;
         }
 
-        template <size_t Index>
-        auto &get_holder()
+        std::tuple<std::optional<Keys>...> values;
+
+        template <size_t I>
+        auto &get_opt() { return std::get<I>(values); }
+
+        template <size_t I>
+        const auto &get_opt() const { return std::get<I>(values); }
+
+        template <size_t... Is>
+        size_t size_impl(std::index_sequence<Is...>) const
         {
-            return detail::GetByIndexHelper<Index, Storage>::get(m_storage);
+            return (get_opt<Is>().has_value() + ...);
         }
 
-        template <size_t Index>
-        const auto &get_holder() const
+        template <size_t... Is>
+        void clear_impl(std::index_sequence<Is...>)
         {
-            return detail::GetByIndexHelper<Index, Storage>::get(m_storage);
+            (get_opt<Is>().reset(), ...);
         }
 
     public:
         TypeMap() = default;
 
-        template <typename T>
-        void AddValue(T &&value)
+        template <typename Key>
+        void AddValue(const Key &val)
         {
-            constexpr int idx = get_index<T>();
-            auto &holder = get_holder<idx>();
-            holder.value = std::forward<T>(value);
-            holder.has_value = true;
+            constexpr int idx = index_of<Key>();
+            get_opt<idx>() = val;
         }
 
-        template <typename T>
-        void AddValue(const T &value)
+        template <typename Key>
+        Key &GetValue()
         {
-            constexpr int idx = get_index<T>();
-            auto &holder = get_holder<idx>();
-            holder.value = value;
-            holder.has_value = true;
-        }
-
-        template <typename T>
-        T &GetValue()
-        {
-            constexpr int idx = get_index<T>();
-            auto &holder = get_holder<idx>();
-            if (!holder.has_value)
-            {
+            constexpr int idx = index_of<Key>();
+            auto &opt = get_opt<idx>();
+            if (!opt.has_value())
                 throw std::bad_optional_access();
-            }
-            return holder.value;
+            return opt.value();
         }
 
-        template <typename T>
-        const T &GetValue() const
+        template <typename Key>
+        const Key &GetValue() const
         {
-            constexpr int idx = get_index<T>();
-            const auto &holder = get_holder<idx>();
-            if (!holder.has_value)
-            {
+            constexpr int idx = index_of<Key>();
+            const auto &opt = get_opt<idx>();
+            if (!opt.has_value())
                 throw std::bad_optional_access();
-            }
-            return holder.value;
+            return opt.value();
         }
 
-        template <typename T>
+        template <typename Key>
         bool Contains() const
         {
-            constexpr int idx = get_index<T>();
-            const auto &holder = get_holder<idx>();
-            return holder.has_value;
+            constexpr int idx = index_of<Key>();
+            return get_opt<idx>().has_value();
         }
 
-        template <typename T>
+        template <typename Key>
         void RemoveValue()
         {
-            constexpr int idx = get_index<T>();
-            auto &holder = get_holder<idx>();
-            holder.has_value = false;
-        }
-
-        template <typename T>
-        std::optional<std::reference_wrapper<T>> TryGetValue()
-        {
-            constexpr int idx = get_index<T>();
-            auto &holder = get_holder<idx>();
-            if (holder.has_value)
-            {
-                return std::ref(holder.value);
-            }
-            return std::nullopt;
-        }
-
-        template <typename T>
-        std::optional<std::reference_wrapper<const T>> TryGetValue() const
-        {
-            constexpr int idx = get_index<T>();
-            const auto &holder = get_holder<idx>();
-            if (holder.has_value)
-            {
-                return std::cref(holder.value);
-            }
-            return std::nullopt;
-        }
-
-        void Clear()
-        {
-            clear_impl(m_storage, std::index_sequence_for<KeyTypes...>{});
-        }
-
-        static constexpr size_t Capacity()
-        {
-            return sizeof...(KeyTypes);
+            constexpr int idx = index_of<Key>();
+            get_opt<idx>().reset();
         }
 
         size_t Size() const
         {
-            return size_impl(m_storage, std::index_sequence_for<KeyTypes...>{});
+            return size_impl(std::index_sequence_for<Keys...>{});
         }
 
-        bool Empty() const
+        static constexpr size_t Capacity()
         {
-            return Size() == 0;
+            return sizeof...(Keys);
         }
 
-    private:
-        template <size_t... Indices>
-        void clear_impl(Storage &storage, std::index_sequence<Indices...>)
+        void Clear()
         {
-            (clear_holder<Indices>(storage), ...);
-        }
-
-        template <size_t Index>
-        void clear_holder(Storage &storage)
-        {
-            auto &holder = detail::GetByIndexHelper<Index, Storage>::get(storage);
-            holder.has_value = false;
-        }
-
-        template <size_t... Indices>
-        size_t size_impl(const Storage &storage, std::index_sequence<Indices...>) const
-        {
-            size_t count = 0;
-            ((count += (detail::GetByIndexHelper<Indices, Storage>::get(storage).has_value ? 1 : 0)), ...);
-            return count;
+            clear_impl(std::index_sequence_for<Keys...>{});
         }
     };
+
 }
 
 #endif
